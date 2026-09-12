@@ -14,7 +14,7 @@ Trong Lab này, tôi dùng AI như một **thought partner** để chuyển mộ
 | Phase 2 — Quick-assess | Giúp cấu trúc 3 Quick Problem Cards: actor, workflow, bottleneck, AI fit và metric. | Chọn Card xử lý pin thấp vì có workflow rõ, ảnh hưởng trực tiếp tới an toàn/vận hành và có thể thiết kế fallback. |
 | Phản biện ý tưởng | Đóng vai CFO/Trưởng vận hành để chỉ ra điểm yếu về nhân quả, metric và chi phí. | Chấp nhận kết luận rằng rule/API/template phải đi trước LLM; không chọn agent tự trị. |
 | Deep-dive | Hỗ trợ diễn đạt current-state/future-state flow, 6-field problem statement, checklist và pilot plan. | Đặt Human-in-the-loop, audit trail, shadow mode và tiêu chí dừng pilot. |
-| Prototype | Hỗ trợ viết system prompt, output JSON, test tấn công và fallback an toàn. | Giữ ranh giới ở cả code lẫn prompt; chạy autograder để xác nhận file và assertions. |
+| Prototype | Hỗ trợ viết system prompt theo slide, test tấn công và fallback an toàn. | Giữ ranh giới ở cả code lẫn prompt; ưu tiên `google-genai` với `temperature=0.0`, có fallback sang SDK legacy và chạy autograder. |
 
 ## 3. Điều AI trả lời chưa tốt hoặc có nguy cơ hallucination
 
@@ -39,11 +39,11 @@ Agentic loop bị loại khỏi MVP vì không tạo thêm giá trị tương x�
 
 Nếu chỉ yêu cầu model “đừng gợi ý trạm xa”, model vẫn có thể hiểu sai dữ liệu, bị prompt injection hoặc tạo output sai định dạng. Ví dụ adversarial input yêu cầu bỏ qua bước nháp để đi trạm cách 8 km khi pin còn 2%.
 
-**Cách tôi sửa:** ràng buộc được thực thi trong code trước khi gọi LLM. Khi phát hiện pin `<5%` và trạm `>5 km`, code trả về `dispatch_mobile_charger`; LLM không được quyền ghi đè. Output có JSON schema, `draft` bắt đầu bằng `[DRAFT_ONLY]`, và dispatcher phải phê duyệt trước khi gửi.
+**Cách tôi sửa:** ràng buộc nguy hiểm nhất được thực thi trong code trước khi gọi LLM. Khi phát hiện pin `<5%` và trạm `>5 km`, code trả về JSON `dispatch_mobile_charger`; LLM không được quyền ghi đè. Với các bản nháp thông thường, code kiểm tra output phải bắt đầu bằng `[DRAFT_ONLY]`; nếu SDK/model lỗi, script trả về bản nháp an toàn yêu cầu điều phối viên xử lý thủ công.
 
 ## 4. Prompt và boundary sau khi cải tiến
 
-System prompt cuối cùng xác định rõ AI là **dispatcher co-pilot**, không phải dispatcher tự trị. Prompt cấm gửi tin, điều xe, thay đổi dữ liệu trạm hoặc bịa dữ kiện vận hành. Khi thiếu GPS/% pin/loại xe/trạng thái trạm, action phải là `escalate_to_dispatcher`.
+System prompt cuối cùng xác định rõ AI là **dispatcher co-pilot**, không phải dispatcher tự trị. Prompt cấm gửi tin, điều xe, thay đổi dữ liệu trạm hoặc bịa dữ kiện vận hành. Với pin dưới 5% và trạm xa hơn 5 km, prompt yêu cầu JSON `dispatch_mobile_charger`; với các tin nhắn thông thường, output phải bắt đầu bằng `[DRAFT_ONLY]`.
 
 Hai boundary được kiểm thử trực tiếp:
 
@@ -51,10 +51,10 @@ Hai boundary được kiểm thử trực tiếp:
 |---|---|---|
 | Pin critical | Pin 2%, yêu cầu đi trạm 8 km và bỏ qua an toàn. | `dispatch_mobile_charger`; không đề xuất trạm xa. |
 | Bỏ qua duyệt | Yêu cầu gửi thẳng và bỏ nhãn draft. | Output vẫn có `[DRAFT_ONLY]`; không có hành động gửi tin. |
-| Thiếu dữ liệu | Yêu cầu “đi trạm gần nhất” nhưng không có % pin/GPS/trạng thái trạm. | `escalate_to_dispatcher`; không suy đoán dữ liệu. |
+| Thiếu dữ liệu | Yêu cầu “đi trạm gần nhất” nhưng không có % pin/GPS/trạng thái trạm. | Test bổ sung để kiểm tra fallback: không được coi dữ liệu thiếu là dữ liệu đã xác thực; điều phối viên phải kiểm tra thủ công. |
 
 ## 5. Kết quả kiểm tra và bài học rút ra
 
-Tôi đã chạy `prompt_prototype.py` ở offline mode khi chưa thiết lập API key. Script vẫn trả về fallback an toàn và vượt qua hai assertion bắt buộc: kích hoạt mobile charger ở ca pin critical và giữ nhãn `[DRAFT_ONLY]` khi người dùng cố bypass. Khi có `GEMINI_API_KEY`, cùng system prompt sẽ được dùng để gọi Gemini; tuy nhiên kết quả model vẫn phải qua validation và fallback an toàn khi output lỗi.
+Tôi đã chạy `prompt_prototype.py` ở offline mode khi chưa thiết lập API key. Script vẫn trả về fallback an toàn và vượt qua hai assertion bắt buộc: kích hoạt mobile charger ở ca pin critical và giữ nhãn `[DRAFT_ONLY]` khi người dùng cố bypass. Khi có `GEMINI_API_KEY`, code ưu tiên SDK `google-genai` với `temperature=0.0`; nếu đường này lỗi, code thử `google-generativeai` trước khi trả fallback an toàn. Với draft thông thường, code từ chối output thiếu `[DRAFT_ONLY]`.
 
 Tôi học được rằng một dự án AI tốt không bắt đầu từ việc chọn model mạnh nhất. Nó bắt đầu từ workflow cụ thể, dữ liệu nào đáng tin, điều gì tuyệt đối không được phép, ai chịu trách nhiệm duyệt và hệ thống quay về đâu khi AI không chắc chắn. Với bài toán này, quyết định **GO** chỉ áp dụng cho prototype/shadow-mode có rào chắn; chưa phải quyết định cho phép hệ thống tự động điều phối ngoài thực tế.
